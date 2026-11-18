@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="fr">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -11,17 +12,48 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script>tailwind.config = { darkMode: 'class' };</script>
     <style>
-        body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
-        .bg-app { background:
-            radial-gradient(1100px 420px at 8% -10%, rgba(99,102,241,.13), transparent 60%),
-            radial-gradient(900px 420px at 100% 0%, rgba(16,185,129,.09), transparent 60%); }
-        .tnum { font-variant-numeric: tabular-nums; }
-        .thin-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
-        .thin-scroll::-webkit-scrollbar-thumb { background: rgba(148,163,184,.45); border-radius: 8px; }
-        @keyframes pop { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-        .pop { animation: pop .25s ease-out; }
+        body {
+            font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+
+        .bg-app {
+            background:
+                radial-gradient(1100px 420px at 8% -10%, rgba(99, 102, 241, .13), transparent 60%),
+                radial-gradient(900px 420px at 100% 0%, rgba(16, 185, 129, .09), transparent 60%);
+        }
+
+        .tnum {
+            font-variant-numeric: tabular-nums;
+        }
+
+        .thin-scroll::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        .thin-scroll::-webkit-scrollbar-thumb {
+            background: rgba(148, 163, 184, .45);
+            border-radius: 8px;
+        }
+
+        @keyframes pop {
+            from {
+                opacity: 0;
+                transform: translateY(6px);
+            }
+
+            to {
+                opacity: 1;
+                transform: none;
+            }
+        }
+
+        .pop {
+            animation: pop .25s ease-out;
+        }
     </style>
 </head>
+
 <body class="bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-100 antialiased">
     <div id="root"></div>
 
@@ -29,24 +61,47 @@
         const { useState, useEffect, useMemo, useRef } = React;
 
         /* =====================================================================
-           LOGIQUE MÉTIER (sans JSX, sans React)
+           LOGIQUE MÉTIER
            ===================================================================== */
-        // <core>
-        // États critiques par système (comparés en minuscules, sauf NOTION en majuscules)
         const CRIT = { web: ['dirty'], notion: ['KO', 'DEAD'], plc: ['dirty', 'ko'] };
         const SYSTEMS = ['web', 'notion', 'plc'];
         const isCrit = (sys, st) =>
             st != null && CRIT[sys].includes(sys === 'notion' ? String(st).toUpperCase() : String(st).toLowerCase());
 
-        // ID = numéro à 4 chiffres : 3 chiffres de casier + 1 chiffre de sous-casier ("0380" -> 380 = casier 38, sous-casier 0)
         const lockerOf = (id) => Math.floor(id / 10);
         const subOf = (id) => id % 10;
+
+        // Fonction d'extrapolation mathématique des index bkRack du PLC vers le format standard (ABCD...)
+        const indexToRack = (x) => {
+            if (x < 1 || x > 180) return null; // Sécurité (4 zones x 45)
+            const idx = x - 1;
+            const A = Math.floor(idx / 90) + 1;
+            const rem1 = idx % 90;
+            const B = Math.floor(rem1 / 45) + 1;
+            const rem2 = rem1 % 45;
+            const C = Math.floor(rem2 / 3) + 1;
+            const D = (rem2 % 3) + 1;
+            return `${A}${B}${C}${D}`;
+        };
+
+        // Convertisseur Notion : transforme les formats héxadécimaux comme "12A1" en "12101"
+        const normalizeRack = (r) => {
+            let name = String(r).toUpperCase().trim();
+            if (name.length === 4) {
+                let C_char = name[2];
+                if (C_char >= 'A' && C_char <= 'F') {
+                    let C = C_char.charCodeAt(0) - 65 + 10; // 'A' devient 10, 'B' 11...
+                    return `${name[0]}${name[1]}${C}${name[3]}`;
+                }
+            }
+            return name;
+        };
 
         function readJsonLoose(text) {
             const out = [];
             const t = (text || '').trim();
             if (!t) return out;
-            try { out.push(JSON.parse(t)); return out; } catch (e) { /* plusieurs pages collées */ }
+            try { out.push(JSON.parse(t)); return out; } catch (e) { }
             let depth = 0, start = -1, inStr = false, esc = false;
             for (let i = 0; i < t.length; i++) {
                 const c = t[i];
@@ -55,14 +110,14 @@
                 if (c === '{' || c === '[') { if (depth === 0) start = i; depth++; }
                 else if (c === '}' || c === ']') {
                     depth--;
-                    if (depth === 0 && start >= 0) { try { out.push(JSON.parse(t.slice(start, i + 1))); } catch (e) {} start = -1; }
+                    if (depth === 0 && start >= 0) { try { out.push(JSON.parse(t.slice(start, i + 1))); } catch (e) { } start = -1; }
                     if (depth < 0) depth = 0;
                 }
             }
             return out;
         }
 
-        function parseWeb(text, machineId) {
+        function parseWeb(text) {
             const docs = readJsonLoose(text);
             const items = [];
             docs.forEach((d) => {
@@ -71,27 +126,32 @@
                 else if (d && d.lockerNumber) items.push(d);
             });
             const machines = new Set();
-            const map = {}, lockerWide = {};
+            const map = {}; 
             let total = 0;
             docs.forEach((d) => { if (d && d.total > total) total = d.total; });
+
             items.forEach((it) => {
                 if (!it || it.lockerNumber == null || it.lockerNumber === '') return;
                 machines.add(String(it.machineId));
-                if (machineId !== '' && String(it.machineId) !== String(machineId)) return;
+
                 const id = parseInt(it.lockerNumber, 10);
                 if (isNaN(id)) return;
-                // 4 chiffres = casier + sous-casier ; 1 à 3 chiffres = casier entier
-                const target = String(it.lockerNumber).trim().length >= 4 ? map : lockerWide;
-                const prev = target[id];
-                if (prev && Date.parse(prev.updatedAt) > Date.parse(it.updatedAt || '')) return;
-                target[id] = {
-                    state: String(it.state || '').trim().toLowerCase() || 'vide',
+
+                const prev = map[id];
+                const currentUpdate = it.updatedAt ? Date.parse(it.updatedAt) : 0;
+                const prevUpdate = prev && prev.updatedAt ? Date.parse(prev.updatedAt) : 0;
+
+                if (prev && prevUpdate > currentUpdate) return;
+
+                map[id] = {
+                    state: String(it.state || '').trim().toLowerCase(),
                     rack: it.rack ? String(it.rack) : '',
                     comment: it.comments || '',
                     updatedAt: it.updatedAt || ''
                 };
             });
-            return { map, locker: lockerWide, count: Object.keys(map).length + Object.keys(lockerWide).length, machines: [...machines].sort(), pages: docs.length, partial: total > items.length ? { got: items.length, total } : null };
+
+            return { map, locker: {}, count: Object.keys(map).length, machines: [...machines].sort(), pages: docs.length, partial: total > items.length ? { got: items.length, total } : null };
         }
 
         function splitCsvLine(line) {
@@ -107,7 +167,6 @@
             return out;
         }
 
-        // Plusieurs lignes pour un même casier : l'état critique l'emporte
         const mergeNotion = (a, b) => (a == null ? b : isCrit('notion', a) ? a : isCrit('notion', b) ? b : a);
 
         function parseNotion(text) {
@@ -123,7 +182,6 @@
                 const state = (cols[cols.length - 1] || '').toUpperCase().replace(/\s/g, '');
                 let m;
                 if ((m = name.match(/^casier\s*(\d+)\s*(.*)$/i))) {
-                    // "xxxa" (4 chiffres) ou "xxx - a [et b]" => sous-casiers ; "xxx" seul => casier entier condamné
                     let l = parseInt(m[1], 10);
                     let subs = (m[2].match(/\d+/g) || []).map(Number);
                     if (m[1].length >= 4 && subs.length === 0) { subs = [l % 10]; l = Math.floor(l / 10); }
@@ -131,7 +189,7 @@
                     else locker[l] = mergeNotion(locker[l], state);
                     count++;
                 } else if ((m = name.match(/^rack\s*(\S+)/i))) {
-                    const k = m[1].toUpperCase();
+                    const k = normalizeRack(m[1]);
                     rack[k] = mergeNotion(rack[k], state);
                     count++;
                 } else skipped++;
@@ -141,15 +199,30 @@
 
         function parsePlc(text) {
             const tmp = {}, numSub = {}, rackDigits = {}, date = {};
+            const rackStates = {};
             (text || '').split(/\r?\n/).forEach((line) => {
                 let m;
                 if (line.indexOf('bkLocker[') >= 0) {
                     if ((m = line.match(/bkLocker\[(\d+)\]\.State_SUB\[(\d+)\];'([^']*)'/))) {
                         const l = +m[1], s = +m[2];
                         if (s <= 9) (tmp[l] = tmp[l] || {})[s] = m[3].trim().toLowerCase();
-                    } else if ((m = line.match(/bkLocker\[(\d+)\]\.NumSub;(\d+)/))) numSub[+m[1]] = +m[2];
-                    else if ((m = line.match(/bkLocker\[(\d+)\]\.Rack\[(\d+)\];(\d+)/))) (rackDigits[+m[1]] = rackDigits[+m[1]] || [])[+m[2]] = m[3];
-                } else if ((m = line.match(/bkDate\.w(Year|Month|Day|Hour|Minute);(\d+)/))) date[m[1]] = +m[2];
+                    } else if ((m = line.match(/bkLocker\[(\d+)\]\.NumSub;(\d+)/))) {
+                        numSub[+m[1]] = +m[2];
+                    } else if ((m = line.match(/bkLocker\[(\d+)\]\.Rack\[(\d+)\];(\d+)/))) {
+                        (rackDigits[+m[1]] = rackDigits[+m[1]] || [])[+m[2]] = m[3];
+                    }
+                } else if ((m = line.match(/bkRack[^\[]*\[(\d+)\][^;]*;'([^']*)'/i))) {
+                    // Extraction des variables d'état concernant le rack (ex: bkRack[1].State;'KO')
+                    const x = parseInt(m[1], 10);
+                    const st = m[2].trim().toLowerCase();
+                    // On ne retient que les valeurs qui ressemblent à un état (ignore les affectations de nom)
+                    if (['ko', 'dirty', 'ok', 'free', 'lock', 'dead', 'remis', 'vide'].includes(st)) {
+                        const rk = indexToRack(x);
+                        if (rk) rackStates[rk] = st;
+                    }
+                } else if ((m = line.match(/bkDate\.w(Year|Month|Day|Hour|Minute);(\d+)/))) {
+                    date[m[1]] = +m[2];
+                }
             });
             const map = {}, rack = {};
             Object.keys(tmp).forEach((l) => {
@@ -159,59 +232,96 @@
                     if (st !== '' || +s < n) map[+l * 10 + +s] = st || 'vide';
                 });
                 const rk = rackDigits[l] ? rackDigits[l].join('') : '';
-                if (rk && !/^0+$/.test(rk)) rack[l] = rk;
+                if (rk && !/^0+$/.test(rk)) rack[l] = normalizeRack(rk);
             });
             const p2 = (v) => String(v).padStart(2, '0');
             const exportDate = date.Year ? `${p2(date.Day)}/${p2(date.Month)}/${date.Year} ${p2(date.Hour || 0)}:${p2(date.Minute || 0)}` : '';
-            return { map, rack, count: Object.keys(map).length, lockers: Object.keys(tmp).length, exportDate };
+            return { map, rack, rackStates, count: Object.keys(map).length, lockers: Object.keys(tmp).length, exportDate };
         }
 
-        // Anomalie <=> au moins un système critique ET au moins un système non aligné (état non critique ou casier introuvable)
         function compare(web, notion, plc) {
+            const allEntries = [];
             const webOf = (id) => web.map[id] || web.locker[lockerOf(id)] || null;
-            const rackOfId = (id) => (webOf(id) && webOf(id).rack) || plc.rack[lockerOf(id)] || '';
+            const rackOfId = (id) => normalizeRack((webOf(id) && webOf(id).rack) || plc.rack[lockerOf(id)] || '');
+            
+            // --- 1. CASIERS ---
             const ids = new Set([...Object.keys(web.map), ...Object.keys(plc.map), ...Object.keys(notion.sub)].map(Number));
             Object.keys(web.locker).forEach((l) => { if (![...ids].some((i) => lockerOf(i) === +l)) ids.add(+l * 10); });
             const known = [...ids];
             Object.keys(notion.locker).forEach((l) => { if (!known.some((i) => lockerOf(i) === +l)) ids.add(+l * 10); });
+            
             const notionOf = (id) => {
-                // sous-casier précis et casier entier condamné : l'état critique l'emporte ; à défaut, état du rack
                 const s = notion.sub[id] != null ? notion.sub[id] : null;
                 const lk = notion.locker[lockerOf(id)] != null ? notion.locker[lockerOf(id)] : null;
-                if (s != null || lk != null) return mergeNotion(s, lk);
-                const r = rackOfId(id).toUpperCase();
-                return r && notion.rack[r] != null ? notion.rack[r] : null;
+                return (s != null || lk != null) ? mergeNotion(s, lk) : null;
             };
-            const anomalies = [];
+
             ids.forEach((id) => {
                 const w = webOf(id) ? webOf(id).state : null;
                 const n = notionOf(id);
                 const p = plc.map[id] != null ? plc.map[id] : null;
                 const flags = { web: isCrit('web', w), notion: isCrit('notion', n), plc: isCrit('plc', p) };
                 const critCount = (flags.web ? 1 : 0) + (flags.notion ? 1 : 0) + (flags.plc ? 1 : 0);
-                if (critCount > 0 && critCount < 3) {
-                    anomalies.push({
-                        id, locker: lockerOf(id), sub: subOf(id), rack: rackOfId(id),
-                        web: w, notion: n, plc: p, flags, critCount,
-                        missing: SYSTEMS.filter((s) => ({ web: w, notion: n, plc: p })[s] == null),
-                        comment: webOf(id) ? webOf(id).comment : ''
-                    });
-                }
+                const isAnomaly = critCount > 0 && critCount < 3;
+                
+                allEntries.push({
+                    type: 'casier', id, displayId: `#${id}`, locker: lockerOf(id), sub: subOf(id), rack: rackOfId(id),
+                    web: w, notion: n, plc: p, flags, critCount, isAnomaly,
+                    missing: SYSTEMS.filter((s) => ({ web: w, notion: n, plc: p })[s] == null),
+                    comment: webOf(id) ? webOf(id).comment : ''
+                });
             });
-            anomalies.sort((a, b) => a.id - b.id);
+
+            // --- 2. RACKS ---
+            const rackIds = new Set([
+                ...Object.keys(notion.rack),
+                ...Object.keys(plc.rackStates || {})
+            ]);
+            
+            // On s'assure d'inclure les racks qui hébergent les casiers trouvés
+            allEntries.forEach(e => {
+                if (e.type === 'casier' && e.rack) rackIds.add(e.rack);
+            });
+
+            rackIds.forEach((r) => {
+                const n = notion.rack[r] != null ? notion.rack[r] : null;
+                const p = (plc.rackStates && plc.rackStates[r] != null) ? plc.rackStates[r] : null;
+                
+                const flags = { web: false, notion: isCrit('notion', n), plc: isCrit('plc', p) };
+                const critCount = (flags.notion ? 1 : 0) + (flags.plc ? 1 : 0);
+                const isAnomaly = critCount > 0 && critCount < 2; // Alerte sur l'un mais pas sur l'autre (sur les 2 systèmes applicables)
+                
+                const missingSystems = [];
+                if (n == null) missingSystems.push('notion');
+                if (p == null) missingSystems.push('plc');
+
+                allEntries.push({
+                    type: 'rack', id: `RACK-${r}`, displayId: `Rack ${r}`, locker: null, sub: null, rack: r,
+                    web: 'N/A', notion: n, plc: p, flags, critCount, isAnomaly,
+                    missing: missingSystems,
+                    comment: 'WEB non applicable pour les Racks.'
+                });
+            });
+
+            allEntries.sort((a, b) => {
+                if (a.type !== b.type) return a.type === 'rack' ? -1 : 1;
+                return a.type === 'rack' ? String(a.rack).localeCompare(String(b.rack)) : a.id - b.id;
+            });
+
+            const anomalies = allEntries.filter(e => e.isAnomaly);
             const perSystem = { web: 0, notion: 0, plc: 0 };
             anomalies.forEach((a) => SYSTEMS.forEach((s) => { if (a.flags[s]) perSystem[s]++; }));
-            return { anomalies, total: ids.size, perSystem };
+            
+            return { allEntries, anomalies, total: ids.size, perSystem };
         }
-        // </core>
 
         /* =====================================================================
            UTILITAIRES UI
            ===================================================================== */
         const store = {
             get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
-            set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} },
-            del(k) { try { localStorage.removeItem(k); } catch (e) {} }
+            set(k, v) { try { localStorage.setItem(k, v); } catch (e) { } },
+            del(k) { try { localStorage.removeItem(k); } catch (e) { } }
         };
 
         const SYS_LABEL = { web: 'WEB', notion: 'NOTION', plc: 'AUTOMATE' };
@@ -236,7 +346,9 @@
             sort: 'M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4',
             tick: 'M5 13l4 4L19 7',
             undo: 'M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6',
-            warn: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z'
+            warn: 'M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z',
+            layers: 'M12 4L4 8l8 4 8-4-8-4zm0 16l-8-4v-4l8 4 8-4v4l-8 4z',
+            list: 'M4 6h16M4 12h16M4 18h16'
         };
         const Icon = ({ n, className = 'w-5 h-5' }) => (
             <svg className={className} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -245,9 +357,9 @@
         );
 
         const ACCENT = {
-            web:    { tile: 'bg-sky-100 text-sky-600 dark:bg-sky-500/15 dark:text-sky-300',          drag: 'ring-sky-400',    dot: 'bg-sky-500' },
+            web: { tile: 'bg-sky-100 text-sky-600 dark:bg-sky-500/15 dark:text-sky-300', drag: 'ring-sky-400', dot: 'bg-sky-500' },
             notion: { tile: 'bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-300', drag: 'ring-emerald-400', dot: 'bg-emerald-500' },
-            plc:    { tile: 'bg-violet-100 text-violet-600 dark:bg-violet-500/15 dark:text-violet-300',     drag: 'ring-violet-400',  dot: 'bg-violet-500' }
+            plc: { tile: 'bg-violet-100 text-violet-600 dark:bg-violet-500/15 dark:text-violet-300', drag: 'ring-violet-400', dot: 'bg-violet-500' }
         };
 
         const CARD = 'rounded-2xl border border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-sm';
@@ -261,23 +373,15 @@
             setTimeout(() => URL.revokeObjectURL(url), 1000);
         };
 
-        const copyText = async (text) => {
-            try { await navigator.clipboard.writeText(text); return true; } catch (e) {
-                try {
-                    const ta = document.createElement('textarea');
-                    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-                    document.body.appendChild(ta); ta.select();
-                    const ok = document.execCommand('copy'); ta.remove(); return ok;
-                } catch (e2) { return false; }
-            }
-        };
-
         /* =====================================================================
-           COMPOSANTS
+           COMPOSANTS UI
            ===================================================================== */
         const StateBadge = ({ sys, state }) => {
+            if (state === 'N/A') {
+                return <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] uppercase font-bold text-slate-400 dark:text-slate-500 border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900">N/A</span>;
+            }
             if (state == null) {
-                return <span className="inline-flex items-center px-2 py-0.5 rounded-md text-xs text-slate-400 dark:text-slate-500 border border-dashed border-slate-300 dark:border-slate-700">non trouvé</span>;
+                return <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] text-slate-400 dark:text-slate-500 border border-dashed border-slate-300 dark:border-slate-700">non trouvé</span>;
             }
             if (isCrit(sys, state)) {
                 return (
@@ -287,7 +391,7 @@
                 );
             }
             const s = String(state).toLowerCase();
-            const dot = ['free', 'remis', 'b2'].includes(s) ? 'bg-emerald-500' : ['lock', 'colis', 'cv'].includes(s) ? 'bg-sky-500' : 'bg-slate-400';
+            const dot = ['free', 'remis', 'b2', 'ok'].includes(s) ? 'bg-emerald-500' : ['lock', 'colis', 'cv'].includes(s) ? 'bg-sky-500' : 'bg-slate-400';
             return (
                 <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md text-xs font-medium bg-slate-50 text-slate-600 ring-1 ring-inset ring-slate-200 dark:bg-slate-800/60 dark:text-slate-300 dark:ring-slate-700">
                     <span className={`w-1.5 h-1.5 rounded-full ${dot}`}></span>{state}
@@ -296,13 +400,13 @@
         };
 
         const Dots = ({ a }) => (
-            <div className="flex items-center gap-1.5" title={`${a.critCount}/3 systèmes en alerte`}>
+            <div className="flex items-center gap-1.5" title={`${a.critCount} système(s) en alerte`}>
                 {SYSTEMS.map((s) => {
                     const missing = a[s] == null;
-                    const cls = a.flags[s] ? 'bg-red-500 border-red-500' : missing ? 'border-dashed border-slate-300 dark:border-slate-600' : 'bg-emerald-400 border-emerald-400';
-                    return <span key={s} title={`${SYS_LABEL[s]} : ${a.flags[s] ? 'critique' : missing ? 'non trouvé' : 'OK'}`} className={`w-2.5 h-2.5 rounded-full border ${cls}`}></span>;
+                    const ignore = a[s] === 'N/A';
+                    const cls = a.flags[s] ? 'bg-red-500 border-red-500' : ignore ? 'bg-slate-200 border-slate-300 dark:bg-slate-700 dark:border-slate-600' : missing ? 'border-dashed border-slate-300 dark:border-slate-600' : 'bg-emerald-400 border-emerald-400';
+                    return <span key={s} title={`${SYS_LABEL[s]} : ${ignore ? 'N/A' : a.flags[s] ? 'critique' : missing ? 'non trouvé' : 'OK'}`} className={`w-2.5 h-2.5 rounded-full border ${cls}`}></span>;
                 })}
-                <span className="text-xs text-slate-400 tnum ml-1">{a.critCount}/3</span>
             </div>
         );
 
@@ -310,59 +414,31 @@
             const [drag, setDrag] = useState(false);
             const fileRef = useRef(null);
             const ac = ACCENT[sys];
-
-            const readFile = async (file) => {
-                if (!file) return;
-                const text = await file.text();
-                onChange(text);
-            };
-
-            const chip = status.tone === 'warn'
-                ? 'bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/30'
-                : status.tone === 'ok'
-                ? 'bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/30'
-                : status.tone === 'err'
-                    ? 'bg-red-50 text-red-700 ring-red-200 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-500/30'
-                    : 'bg-slate-100 text-slate-500 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700';
+            const readFile = async (file) => { if (file) onChange(await file.text()); };
+            const chip = status.tone === 'warn' ? 'bg-amber-50 text-amber-700 ring-amber-200 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/30'
+                : status.tone === 'ok' ? 'bg-emerald-50 text-emerald-700 ring-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/30'
+                : status.tone === 'err' ? 'bg-red-50 text-red-700 ring-red-200 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-500/30'
+                : 'bg-slate-100 text-slate-500 ring-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700';
 
             return (
-                <div
-                    className={`${CARD} flex flex-col overflow-hidden transition ${drag ? `ring-2 ${ac.drag}` : ''}`}
+                <div className={`${CARD} flex flex-col overflow-hidden transition ${drag ? `ring-2 ${ac.drag}` : ''}`}
                     onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
-                    onDragLeave={() => setDrag(false)}
-                    onDrop={(e) => { e.preventDefault(); setDrag(false); readFile(e.dataTransfer.files[0]); }}
-                >
+                    onDragLeave={() => setDrag(false)} onDrop={(e) => { e.preventDefault(); setDrag(false); readFile(e.dataTransfer.files[0]); }}>
                     <div className="p-4 flex items-center gap-3">
                         <div className={`p-2.5 rounded-xl ${ac.tile}`}><Icon n={icon} className="w-5 h-5" /></div>
-                        <div className="min-w-0 flex-1">
-                            <h3 className="font-semibold leading-tight">{title}</h3>
-                            <p className="text-xs text-slate-500 dark:text-slate-400">{format}</p>
-                        </div>
+                        <div className="min-w-0 flex-1"><h3 className="font-semibold leading-tight">{title}</h3><p className="text-xs text-slate-500 dark:text-slate-400">{format}</p></div>
                         <span className={`text-xs font-medium px-2 py-1 rounded-full ring-1 ring-inset ${chip}`}>{status.label}</span>
                     </div>
-
                     <div className="relative px-4">
-                        <textarea
-                            value={value}
-                            onChange={(e) => onChange(e.target.value)}
-                            placeholder={placeholder}
-                            spellCheck="false"
-                            className="w-full h-28 resize-none p-3 text-[11px] leading-snug font-mono rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-400/60 thin-scroll"
-                        />
+                        <textarea value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} spellCheck="false"
+                            className="w-full h-28 resize-none p-3 text-[11px] leading-snug font-mono rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-400/60 thin-scroll" />
                     </div>
-
                     <div className="p-4 pt-3 flex items-center justify-between gap-2">
                         <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2" title={status.detail}>{status.detail}</p>
                         <div className="flex items-center gap-1 shrink-0">
                             <input ref={fileRef} type="file" accept={accept} className="hidden" onChange={(e) => { readFile(e.target.files[0]); e.target.value = ''; }} />
-                            <button onClick={() => fileRef.current && fileRef.current.click()} className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition">
-                                <Icon n="upload" className="w-4 h-4" />Fichier
-                            </button>
-                            {value && (
-                                <button onClick={() => onChange('')} title="Vider" className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition">
-                                    <Icon n="x" className="w-4 h-4" />
-                                </button>
-                            )}
+                            <button onClick={() => fileRef.current && fileRef.current.click()} className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition"><Icon n="upload" className="w-4 h-4" />Fichier</button>
+                            {value && <button onClick={() => onChange('')} title="Vider" className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition"><Icon n="x" className="w-4 h-4" /></button>}
                         </div>
                     </div>
                 </div>
@@ -381,18 +457,22 @@
         };
 
         /* =====================================================================
-           APPLICATION
+           APPLICATION PRINCIPALE
            ===================================================================== */
         function App() {
-            const [machineId, setMachineId] = useState(() => store.get('sync_machine') || '1');
+            const [machineName, setMachineName] = useState(() => store.get('sync_machine_name') || 'Machine 1');
             const [webData, setWebData] = useState(() => store.get('sync_web') || '');
             const [notionData, setNotionData] = useState(() => store.get('sync_notion') || '');
             const [plcData, setPlcData] = useState(() => store.get('sync_plc') || '');
             const [history, setHistory] = useState(() => { try { return JSON.parse(store.get('sync_history') || '[]'); } catch (e) { return []; } });
             const [theme, setTheme] = useState(() => store.get('sync_theme') || (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
             const [result, setResult] = useState(null);
+            
+            // UI States
             const [search, setSearch] = useState('');
             const [filter, setFilter] = useState('all');
+            const [viewMode, setViewMode] = useState('anomalies'); // 'anomalies' ou 'inventory'
+            const [viewType, setViewType] = useState('all'); // 'all', 'casier', 'rack'
             const [sort, setSort] = useState({ key: 'id', dir: 1 });
             const [toast, setToast] = useState(null);
             const [selected, setSelected] = useState(() => new Set());
@@ -404,7 +484,7 @@
             useEffect(() => { store.set('sync_web', webData); }, [webData]);
             useEffect(() => { store.set('sync_notion', notionData); }, [notionData]);
             useEffect(() => { store.set('sync_plc', plcData); }, [plcData]);
-            useEffect(() => { store.set('sync_machine', machineId); }, [machineId]);
+            useEffect(() => { store.set('sync_machine_name', machineName); }, [machineName]);
             useEffect(() => {
                 store.set('sync_theme', theme);
                 document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -416,62 +496,60 @@
                 toastTimer.current = setTimeout(() => setToast(null), undo ? 7000 : 2600);
             };
 
-            // ---- Validation manuelle : clé = machine > ID ; instantané des 3 états au moment de la validation
             const vKey = (a) => `${a.web}|${a.notion}|${a.plc}`;
             const persistValidated = (next) => { validatedRef.current = next; setValidated(next); store.set('sync_validated', JSON.stringify(next)); };
 
-            // Parsing en direct : les statuts des 3 sources se mettent à jour pendant la saisie
-            const webP = useMemo(() => parseWeb(webData, machineId), [webData, machineId]);
+            const webP = useMemo(() => parseWeb(webData), [webData]);
             const notionP = useMemo(() => parseNotion(notionData), [notionData]);
             const plcP = useMemo(() => parsePlc(plcData), [plcData]);
 
-            const webStatus = !webData.trim() ? { tone: 'idle', label: 'En attente', detail: 'Collez le JSON ou déposez un fichier' }
-                : webP.pages === 0 ? { tone: 'err', label: 'Illisible', detail: 'JSON invalide' }
-                : webP.count === 0 ? { tone: 'err', label: '0 casier', detail: `Aucun casier pour la machine ${machineId} (détectées : ${webP.machines.join(', ') || '—'})` }
-                : webP.partial ? { tone: 'warn', label: `${webP.count} casiers`, detail: `Export partiel : ${webP.partial.got}/${webP.partial.total} casiers collés (toutes machines) — récupérez les autres pages` }
-                : { tone: 'ok', label: `${webP.count} casiers`, detail: `Machine ${machineId}${webP.machines.length > 1 ? ` · autres : ${webP.machines.filter((m) => m !== String(machineId)).join(', ')}` : ''}${webP.pages > 1 ? ` · ${webP.pages} pages` : ''}` };
-
-            const notionStatus = !notionData.trim() ? { tone: 'idle', label: 'En attente', detail: 'Collez le CSV ou déposez un fichier' }
-                : notionP.count === 0 ? { tone: 'err', label: 'Illisible', detail: 'Aucune ligne « Casier N » ou « Rack N »' }
+            const webStatus = !webData.trim() ? { tone: 'idle', label: 'En attente', detail: 'Collez le JSON ou déposez un fichier' } 
+                : webP.pages === 0 ? { tone: 'err', label: 'Illisible', detail: 'JSON invalide' } 
+                : webP.count === 0 ? { tone: 'err', label: '0 casier', detail: 'Aucun casier trouvé dans le JSON' } 
+                : webP.partial ? { tone: 'warn', label: `${webP.count} casiers`, detail: `Export partiel : ${webP.partial.got}/${webP.partial.total} casiers` } 
+                : { tone: 'ok', label: `${webP.count} casiers`, detail: `ID(s) Web détectés : ${webP.machines.join(', ')}` };
+                
+            const notionStatus = !notionData.trim() ? { tone: 'idle', label: 'En attente', detail: 'Collez le CSV' } 
+                : notionP.count === 0 ? { tone: 'err', label: 'Illisible', detail: 'Aucune ligne « Casier » ou « Rack »' } 
                 : { tone: 'ok', label: `${notionP.count} lignes`, detail: `${Object.keys(notionP.sub).length} sous-casiers · ${Object.keys(notionP.locker).length} casiers · ${Object.keys(notionP.rack).length} racks` };
-
-            const plcStatus = !plcData.trim() ? { tone: 'idle', label: 'En attente', detail: 'Collez l’export SoMachine ou déposez un fichier' }
-                : plcP.lockers === 0 ? { tone: 'err', label: 'Illisible', detail: 'Aucune variable bkLocker[…].State_SUB[…]' }
-                : { tone: 'ok', label: `${plcP.count} sous-casiers`, detail: `${plcP.lockers} casiers${plcP.exportDate ? ` · export du ${plcP.exportDate}` : ''}` };
+                
+            const plcStatus = !plcData.trim() ? { tone: 'idle', label: 'En attente', detail: 'Collez l’export SoMachine' } 
+                : plcP.lockers === 0 ? { tone: 'err', label: 'Illisible', detail: 'Aucune variable bkLocker' } 
+                : { tone: 'ok', label: `${plcP.count} sous-casiers`, detail: `${plcP.lockers} casiers` };
 
             const readyCount = [webStatus, notionStatus, plcStatus].filter((s) => s.tone === 'ok' || s.tone === 'warn').length;
-            const signature = `${webData.length}|${notionData.length}|${plcData.length}|${machineId}`;
+            const signature = `${webData.length}|${notionData.length}|${plcData.length}|${machineName}`;
 
             const run = () => {
                 if (readyCount === 0) { showToast('Importez au moins une source avant de lancer l’analyse'); return; }
                 const r = compare(webP, notionP, plcP);
-                const prev = history.find((h) => String(h.machine) === String(machineId) && Array.isArray(h.ids));
+                const prev = history.find((h) => String(h.machine) === String(machineName) && Array.isArray(h.ids));
                 const prevSet = new Set(prev ? prev.ids : []);
                 const curSet = new Set(r.anomalies.map((a) => a.id));
                 const newIds = new Set(prev ? r.anomalies.filter((a) => !prevSet.has(a.id)).map((a) => a.id) : []);
                 const resolved = prev ? [...prevSet].filter((i) => !curSet.has(i)).length : null;
                 const now = new Date();
-                // une validation disparaît quand l'anomalie n'existe plus (corrigée) : si elle revient, elle sera à retraiter
-                const mKey = String(machineId);
+                
+                const mKey = String(machineName);
                 const oldM = validatedRef.current[mKey] || {};
                 const keepM = {};
                 r.anomalies.forEach((a) => { if (oldM[a.id]) keepM[a.id] = oldM[a.id]; });
                 if (Object.keys(oldM).length !== Object.keys(keepM).length) persistValidated({ ...validatedRef.current, [mKey]: keepM });
+                
                 const activeCount = r.anomalies.filter((a) => !(keepM[a.id] && keepM[a.id].snap === vKey(a))).length;
-                setResult({ ...r, newIds, resolved, hasPrev: !!prev, ranAt: now.toLocaleString('fr-FR'), machine: machineId, webPartial: webP.partial, sig: signature, sources: readyCount });
-                setSearch(''); setFilter('all');
-                const entry = { date: now.toLocaleString('fr-FR'), ts: now.getTime(), machine: machineId, count: activeCount, total: r.total, ids: r.anomalies.map((a) => a.id) };
+                setResult({ ...r, newIds, resolved, hasPrev: !!prev, ranAt: now.toLocaleString('fr-FR'), machine: machineName, webPartial: webP.partial, sig: signature, sources: readyCount });
+                setSearch(''); setFilter('all'); setViewType('all'); setViewMode('anomalies');
+                
+                const entry = { date: now.toLocaleString('fr-FR'), ts: now.getTime(), machine: machineName, count: activeCount, total: r.total, ids: r.anomalies.map((a) => a.id) };
                 const next = [entry, ...history].slice(0, 20);
                 setHistory(next);
                 store.set('sync_history', JSON.stringify(next));
             };
 
             const clearHistory = () => { setHistory([]); store.del('sync_history'); };
-
             const vmap = result ? (validated[String(result.machine)] || {}) : {};
             const isChanged = (a) => !!vmap[a.id] && vmap[a.id].snap !== vKey(a);
 
-            // active = à traiter ; done = validées (et inchangées depuis)
             const view = useMemo(() => {
                 if (!result) return null;
                 const m = validated[String(result.machine)] || {};
@@ -479,7 +557,7 @@
                 result.anomalies.forEach((a) => ((m[a.id] && m[a.id].snap === vKey(a)) ? done : active).push(a));
                 const perSystem = { web: 0, notion: 0, plc: 0 };
                 active.forEach((a) => SYSTEMS.forEach((s) => { if (a.flags[s]) perSystem[s]++; }));
-                return { active, done, perSystem };
+                return { active, done, perSystem, all: result.allEntries };
             }, [result, validated]);
 
             const showingDone = filter === 'validated';
@@ -487,23 +565,39 @@
             const rows = useMemo(() => {
                 if (!result || !view) return [];
                 const q = search.trim().toLowerCase();
-                let list = (showingDone ? view.done : view.active).filter((a) => {
-                    if (filter === 'web' || filter === 'notion' || filter === 'plc') { if (!a.flags[filter]) return false; }
-                    else if (filter === 'missing') { if (a.missing.length === 0) return false; }
-                    else if (filter === 'new') { if (!result.newIds.has(a.id)) return false; }
+                
+                let baseList = viewMode === 'inventory' ? view.all : (showingDone ? view.done : view.active);
+                
+                let list = baseList.filter((a) => {
+                    if (viewType !== 'all' && a.type !== viewType) return false;
+                    
+                    if (viewMode !== 'inventory') {
+                        if (filter === 'web' || filter === 'notion' || filter === 'plc') { if (!a.flags[filter]) return false; }
+                        else if (filter === 'missing') { if (a.missing.length === 0) return false; }
+                        else if (filter === 'new') { if (!result.newIds.has(a.id)) return false; }
+                    }
+                    
                     if (!q) return true;
-                    return String(a.id).includes(q) || String(a.locker).includes(q) || a.rack.toLowerCase().includes(q) || (a.comment || '').toLowerCase().includes(q);
+                    return String(a.displayId).toLowerCase().includes(q) || (a.rack || '').toLowerCase().includes(q) || (a.comment || '').toLowerCase().includes(q);
                 });
+
                 const k = sort.key;
                 list = [...list].sort((a, b) => {
-                    const va = k === 'id' || k === 'critCount' ? a[k] : String(a[k] == null ? '~' : a[k]);
-                    const vb = k === 'id' || k === 'critCount' ? b[k] : String(b[k] == null ? '~' : b[k]);
-                    return (va < vb ? -1 : va > vb ? 1 : a.id - b.id) * sort.dir;
+                    const va = k === 'id' ? a.displayId : k === 'critCount' ? a[k] : String(a[k] == null ? '~' : a[k]);
+                    const vb = k === 'id' ? b.displayId : k === 'critCount' ? b[k] : String(b[k] == null ? '~' : b[k]);
+                    if (k === 'id') return String(va).localeCompare(String(vb), undefined, {numeric: true}) * sort.dir;
+                    return (va < vb ? -1 : va > vb ? 1 : String(a.displayId).localeCompare(String(b.displayId))) * sort.dir;
                 });
                 return list;
-            }, [result, view, search, filter, sort]);
+            }, [result, view, search, filter, viewType, viewMode, sort]);
 
-            useEffect(() => { setSelected(new Set()); }, [filter, search, result]);
+            useEffect(() => { setSelected(new Set()); }, [filter, viewType, viewMode, search, result]);
+
+            const toggleOne = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+            const selectedRows = rows.filter((a) => selected.has(a.id));
+            const allSelected = rows.length > 0 && rows.every((a) => selected.has(a.id));
+            const toggleAll = () => setSelected(allSelected ? new Set() : new Set(rows.map((a) => a.id)));
+            const toggleSort = (key) => setSort((s) => (s.key === key ? { key, dir: -s.dir } : { key, dir: 1 }));
 
             const validateRows = (list) => {
                 if (!list.length || !result) return;
@@ -511,7 +605,7 @@
                 const prevM = validatedRef.current[mKey] || {};
                 const m = { ...prevM };
                 const ts = Date.now();
-                list.forEach((a) => { m[a.id] = { ts, snap: vKey(a) }; });
+                list.filter(a => a.isAnomaly).forEach((a) => { m[a.id] = { ts, snap: vKey(a) }; });
                 persistValidated({ ...validatedRef.current, [mKey]: m });
                 setSelected(new Set());
                 showToast(`${list.length} ligne(s) validée(s)`, () => { persistValidated({ ...validatedRef.current, [mKey]: prevM }); setToast(null); });
@@ -526,34 +620,22 @@
                 setSelected(new Set());
                 showToast(`${list.length} ligne(s) rouverte(s)`, () => { persistValidated({ ...validatedRef.current, [mKey]: prevM }); setToast(null); });
             };
-            const toggleOne = (id) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
-            const allSelected = rows.length > 0 && rows.every((a) => selected.has(a.id));
-            const toggleAll = () => setSelected(allSelected ? new Set() : new Set(rows.map((a) => a.id)));
-            const selectedRows = rows.filter((a) => selected.has(a.id));
-            const fmtTs = (ts) => new Date(ts).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-
-            const toggleSort = (key) => setSort((s) => (s.key === key ? { key, dir: -s.dir } : { key, dir: 1 }));
 
             const exportCsv = () => {
-                const head = ['ID', 'Casier', 'Sous-casier', 'Rack', 'WEB', 'NOTION', 'AUTOMATE', 'Systemes en alerte', 'Commentaire WEB'];
+                const prefix = viewMode === 'inventory' ? 'inventaire' : 'anomalies';
+                const head = ['Vue', 'Identifiant', 'Casier', 'Sous-casier', 'Rack', 'WEB', 'NOTION', 'AUTOMATE', 'Systemes en alerte', 'Commentaire'];
                 const esc = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
-                const lines = rows.map((a) => [a.id, a.locker, a.sub, a.rack, a.web || 'non trouvé', a.notion || 'non trouvé', a.plc || 'non trouvé', SYSTEMS.filter((s) => a.flags[s]).map((s) => SYS_LABEL[s]).join(' + '), a.comment].map(esc).join(';'));
-                downloadFile(`anomalies_machine${result.machine}_${new Date().toISOString().slice(0, 10)}.csv`, '﻿' + [head.map(esc).join(';'), ...lines].join('\r\n'), 'text/csv;charset=utf-8');
-                showToast(`${rows.length} anomalies exportées`);
+                const lines = rows.map((a) => [a.type, a.displayId, a.locker, a.sub, a.rack, a.web || 'non trouvé', a.notion || 'non trouvé', a.plc || 'non trouvé', SYSTEMS.filter((s) => a.flags[s]).map((s) => SYS_LABEL[s]).join(' + '), a.comment].map(esc).join(';'));
+                downloadFile(`${prefix}_${result.machine.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.csv`, '﻿' + [head.map(esc).join(';'), ...lines].join('\r\n'), 'text/csv;charset=utf-8');
+                showToast(`${rows.length} lignes exportées`);
             };
 
-            const copyIds = async () => {
-                const ok = await copyText(rows.map((a) => '#' + a.id).join(', '));
-                showToast(ok ? `${rows.length} IDs copiés` : 'Copie impossible');
-            };
-
-            const stale = result && result.sig !== signature;
             const filterDefs = result && view ? [
-                { k: 'all', label: 'À traiter', n: view.active.length },
+                { k: 'all', label: 'Toutes les alertes', n: view.active.length },
                 { k: 'web', label: 'WEB', n: view.perSystem.web },
                 { k: 'notion', label: 'NOTION', n: view.perSystem.notion },
                 { k: 'plc', label: 'AUTOMATE', n: view.perSystem.plc },
-                { k: 'missing', label: 'Non trouvé', n: view.active.filter((a) => a.missing.length).length },
+                { k: 'missing', label: 'Non trouvés', n: view.active.filter((a) => a.missing.length).length },
                 ...(view.active.some((a) => result.newIds.has(a.id)) ? [{ k: 'new', label: 'Nouvelles', n: view.active.filter((a) => result.newIds.has(a.id)).length }] : []),
                 ...(view.done.length ? [{ k: 'validated', label: 'Validées', n: view.done.length }] : [])
             ] : [];
@@ -568,7 +650,6 @@
 
             return (
                 <div className="min-h-screen bg-app">
-                    {/* ---------- En-tête ---------- */}
                     <header className="sticky top-0 z-20 backdrop-blur-md bg-white/75 dark:bg-slate-900/75 border-b border-slate-200/80 dark:border-slate-800">
                         <div className="max-w-[1400px] mx-auto px-4 md:px-8 py-3 flex flex-wrap items-center justify-between gap-3">
                             <div className="flex items-center gap-3">
@@ -579,17 +660,14 @@
                                 </div>
                             </div>
                             <div className="flex items-center gap-2 md:gap-3">
-                                <label className="flex items-center rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
-                                    <span className="px-3 py-2 text-xs font-medium text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700">Machine</span>
-                                    <input type="number" min="0" value={machineId} onChange={(e) => setMachineId(e.target.value)}
-                                        className="w-16 px-2 py-2 text-center font-bold bg-transparent focus:outline-none tnum" />
+                                <label className="flex items-center rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 cursor-text focus-within:ring-2 focus-within:ring-indigo-500">
+                                    <span className="px-3 py-2.5 text-xs font-medium text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700">Identifiant</span>
+                                    <input type="text" value={machineName} onChange={(e) => setMachineName(e.target.value)} placeholder="Ex: Machine 1" className="w-32 px-3 py-2 font-bold bg-transparent focus:outline-none placeholder-slate-300 dark:placeholder-slate-600" />
                                 </label>
-                                <button onClick={run}
-                                    className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-sm text-white bg-gradient-to-br from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 shadow-md shadow-indigo-500/30 active:scale-[.98] transition">
+                                <button onClick={run} className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-sm text-white bg-gradient-to-br from-indigo-500 to-violet-600 hover:from-indigo-600 hover:to-violet-700 shadow-md shadow-indigo-500/30 active:scale-[.98] transition">
                                     <Icon n="play" className="w-5 h-5" />Lancer l'analyse
                                 </button>
-                                <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} title="Changer de thème"
-                                    className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition">
+                                <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} title="Changer de thème" className="p-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition">
                                     <Icon n={theme === 'dark' ? 'sun' : 'moon'} className="w-5 h-5" />
                                 </button>
                             </div>
@@ -597,56 +675,39 @@
                     </header>
 
                     <main className="max-w-[1400px] mx-auto px-4 md:px-8 py-6 space-y-6">
-                        {/* ---------- Sources ---------- */}
                         <section>
                             <div className="flex items-center justify-between mb-3">
                                 <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">1 · Sources de données</h2>
-                                <span className="text-xs text-slate-500 dark:text-slate-400">{readyCount}/3 prêtes · collez ou glissez-déposez un fichier</span>
+                                <span className="text-xs text-slate-500 dark:text-slate-400">{readyCount}/3 prêtes</span>
                             </div>
                             <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-                                <SourceCard sys="web" title="WEB" format="Export JSON du back-end (plusieurs pages acceptées)" icon="json"
-                                    value={webData} onChange={setWebData} status={webStatus} accept=".json,.txt" placeholder='{"data":[{"lockerNumber":"0380","state":"lock","machineId":1,…}]}' />
-                                <SourceCard sys="notion" title="NOTION" format="Export CSV · Nom, Site, État" icon="table"
-                                    value={notionData} onChange={setNotionData} status={notionStatus} accept=".csv,.txt" placeholder={'Name,🤖 Site,État\nCasier 4 - 0,Dropper Epinay,KO'} />
-                                <SourceCard sys="plc" title="AUTOMATE" format="Export SoMachine (variables en ligne)" icon="term"
-                                    value={plcData} onChange={setPlcData} status={plcStatus} accept=".csv,.txt" placeholder="GVL_BACKUP.bkLocker[34].State_SUB[0];'KO';" />
+                                <SourceCard sys="web" title="WEB" format="Export JSON du back-end" icon="json" value={webData} onChange={setWebData} status={webStatus} accept=".json,.txt" placeholder='{"data":[{"lockerNumber":"0380","state":"lock","machineId":1,…}]}' />
+                                <SourceCard sys="notion" title="NOTION" format="Export CSV · Nom, Site, État" icon="table" value={notionData} onChange={setNotionData} status={notionStatus} accept=".csv,.txt" placeholder={'Name,🤖 Site,État\nCasier 4 - 0,Dropper Epinay,KO\nRack ASCG,Dropper Epinay,KO'} />
+                                <SourceCard sys="plc" title="AUTOMATE" format="Export SoMachine (variables en ligne)" icon="term" value={plcData} onChange={setPlcData} status={plcStatus} accept=".csv,.txt" placeholder="GVL_BACKUP.bkLocker[34].State_SUB[0];'KO';" />
                             </div>
                         </section>
 
-                        {/* ---------- Résultats + Historique ---------- */}
                         <section className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_300px] gap-6 items-start">
                             <div className="space-y-4">
-                                <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">2 · Résultats</h2>
-
+                                <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">2 · Résultats pour {result ? result.machine : machineName || 'la machine'}</h2>
                                 {!result ? (
                                     <div className={`${CARD} py-16 px-6 text-center`}>
                                         <div className="mx-auto w-14 h-14 rounded-2xl bg-indigo-50 dark:bg-indigo-500/10 text-indigo-500 flex items-center justify-center"><Icon n="play" className="w-7 h-7" /></div>
                                         <p className="mt-4 font-semibold">Prêt à analyser</p>
-                                        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto">Importez vos trois exports puis cliquez sur « Lancer l'analyse ». Les casiers dont l'état critique n'est pas partagé par les autres systèmes apparaîtront ici.</p>
-                                        <button onClick={run} className="mt-5 inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 transition">
-                                            <Icon n="play" className="w-4 h-4" />Lancer l'analyse
-                                        </button>
+                                        <p className="mt-1 text-sm text-slate-500 dark:text-slate-400 max-w-md mx-auto">Importez vos trois exports puis cliquez sur « Lancer l'analyse ».</p>
+                                        <button onClick={run} className="mt-5 inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 transition"><Icon n="play" className="w-4 h-4" />Lancer l'analyse</button>
                                     </div>
                                 ) : (
                                     <div className="space-y-4 pop">
                                         {result.webPartial && (
                                             <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm bg-amber-50 text-amber-800 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-200 dark:border-amber-500/30">
                                                 <Icon n="warn" className="w-5 h-5 shrink-0" />
-                                                <span>Export WEB partiel ({result.webPartial.got}/{result.webPartial.total} casiers) : les « non trouvé » côté WEB peuvent être de faux positifs. Collez toutes les pages du back-end.</span>
+                                                <span>Export WEB partiel ({result.webPartial.got}/{result.webPartial.total} casiers) : collez toutes les pages.</span>
                                             </div>
                                         )}
-                                        {stale && (
-                                            <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm bg-amber-50 text-amber-800 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-200 dark:border-amber-500/30">
-                                                <Icon n="warn" className="w-5 h-5 shrink-0" />
-                                                <span className="flex-1">Les données ont changé depuis cette analyse.</span>
-                                                <button onClick={run} className="font-semibold underline underline-offset-2">Relancer</button>
-                                            </div>
-                                        )}
-
                                         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                                            <Kpi label="À traiter" value={view.active.length} tone={view.active.length ? 'bad' : 'good'}
-                                                sub={(view.done.length ? `${view.done.length} validée(s) · ` : '') + (result.hasPrev ? `${result.newIds.size} nouvelle(s) · ${result.resolved} résolue(s) vs précédente` : 'Première analyse de cette machine')} />
-                                            <Kpi label="Sous-casiers croisés" value={result.total} sub={`Machine ${result.machine} · ${result.sources}/3 sources`} />
+                                            <Kpi label="À traiter" value={view.active.length} tone={view.active.length ? 'bad' : 'good'} sub={(view.done.length ? `${view.done.length} validée(s) · ` : '') + (result.hasPrev ? `${result.newIds.size} nouvelle(s)` : '')} />
+                                            <Kpi label="Sous-casiers croisés" value={result.total} sub={`${result.machine} · ${result.sources}/3 sources`} />
                                             <Kpi label="Taux d'anomalie" value={result.total ? (view.active.length / result.total * 100).toFixed(1) + ' %' : '—'} tone={view.active.length ? 'bad' : 'good'} sub={`Analyse du ${result.ranAt}`} />
                                             <Kpi label="Alertes par système">
                                                 <div className="space-y-1.5">
@@ -661,159 +722,148 @@
                                         </div>
 
                                         <div className={`${CARD} overflow-hidden`}>
-                                            {result.anomalies.length === 0 ? (
-                                                <div className="py-14 text-center">
-                                                    <div className="mx-auto w-14 h-14 rounded-2xl bg-emerald-50 dark:bg-emerald-500/10 text-emerald-500 flex items-center justify-center"><Icon n="check" className="w-8 h-8" /></div>
-                                                    <p className="mt-4 font-semibold text-emerald-600 dark:text-emerald-400">Aucune anomalie critique</p>
-                                                    <p className="text-sm text-slate-500 dark:text-slate-400">Les trois systèmes sont alignés.</p>
-                                                </div>
-                                            ) : (
-                                                <>
-                                                    <div className="p-4 border-b border-slate-200/80 dark:border-slate-800 space-y-3">
-                                                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                                                            <div className="flex items-center gap-2">
-                                                                {showingDone
-                                                                    ? <><Icon n="check" className="w-6 h-6 text-emerald-500" /><h3 className="font-bold text-emerald-600 dark:text-emerald-400">{view.done.length} ligne(s) validée(s)</h3></>
-                                                                    : view.active.length > 0
-                                                                        ? <><Icon n="alert" className="w-6 h-6 text-red-500" /><h3 className="font-bold text-red-600 dark:text-red-400">{view.active.length} anomalie(s) à traiter</h3></>
-                                                                        : <><Icon n="check" className="w-6 h-6 text-emerald-500" /><h3 className="font-bold text-emerald-600 dark:text-emerald-400">Tout est traité</h3></>}
-                                                                {rows.length !== (showingDone ? view.done.length : view.active.length) && <span className="text-xs text-slate-500">· {rows.length} affichée(s)</span>}
-                                                            </div>
-                                                            <div className="flex items-center gap-2">
-                                                                <div className="relative flex-1 md:w-60">
-                                                                    <Icon n="search" className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                                                                    <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Casier, rack, commentaire…"
-                                                                        className="w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-400/60" />
-                                                                </div>
-                                                                <button onClick={copyIds} title="Copier les IDs affichés" className="p-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 transition"><Icon n="copy" className="w-4 h-4" /></button>
-                                                                <button onClick={exportCsv} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition">
-                                                                    <Icon n="download" className="w-4 h-4" />CSV
-                                                                </button>
-                                                            </div>
-                                                        </div>
-                                                        <div className="flex flex-wrap gap-2">
-                                                            {filterDefs.map((f) => (
-                                                                <button key={f.k} onClick={() => setFilter(f.k)}
-                                                                    className={`px-3 py-1 rounded-full text-xs font-medium border transition ${filter === f.k
-                                                                        ? 'bg-indigo-600 text-white border-indigo-600'
-                                                                        : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:border-indigo-300'}`}>
-                                                                    {f.label} <span className="opacity-70 tnum">{f.n}</span>
-                                                                </button>
-                                                            ))}
-                                                        </div>
-                                                        {selectedRows.length > 0 && (
-                                                            <div className="pop flex flex-wrap items-center gap-3 px-3 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-500/30">
-                                                                <span className="text-sm font-medium text-indigo-700 dark:text-indigo-200 tnum">{selectedRows.length} sélectionnée(s)</span>
-                                                                {showingDone
-                                                                    ? <button onClick={() => reopenRows(selectedRows)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 transition"><Icon n="undo" className="w-4 h-4" />Rouvrir la sélection</button>
-                                                                    : <button onClick={() => validateRows(selectedRows)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition"><Icon n="tick" className="w-4 h-4" />Valider la sélection</button>}
-                                                                <button onClick={() => setSelected(new Set())} className="text-sm text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 transition">Désélectionner</button>
-                                                            </div>
-                                                        )}
-                                                        {showingDone && view.done.length > 0 && selectedRows.length === 0 && (
-                                                            <button onClick={() => reopenRows(view.done)} className="text-xs font-medium text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-300 underline underline-offset-2">Tout rouvrir</button>
-                                                        )}
+                                            <div className="p-4 border-b border-slate-200/80 dark:border-slate-800 space-y-4">
+                                                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                                    
+                                                    <div className="flex bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl w-max">
+                                                        <button onClick={() => setViewMode('anomalies')} className={`flex items-center gap-2 px-4 py-2 text-sm font-bold rounded-lg transition ${viewMode === 'anomalies' ? 'bg-white dark:bg-slate-700 shadow-sm text-indigo-600 dark:text-indigo-400' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}>
+                                                            <Icon n="alert" className="w-4 h-4" /> Anomalies ({view.active.length})
+                                                        </button>
+                                                        <button onClick={() => setViewMode('inventory')} className={`flex items-center gap-2 px-4 py-2 text-sm font-bold rounded-lg transition ${viewMode === 'inventory' ? 'bg-white dark:bg-slate-700 shadow-sm text-indigo-600 dark:text-indigo-400' : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}>
+                                                            <Icon n="list" className="w-4 h-4" /> Inventaire complet ({view.all.length})
+                                                        </button>
                                                     </div>
 
-                                                    <div className="overflow-auto max-h-[62vh] thin-scroll">
-                                                        <table className="w-full text-sm text-left">
-                                                            <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-slate-900 text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
-                                                                <tr>
-                                                                    <th className="pl-4 pr-0 py-3 w-8"><input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={rows.length === 0} aria-label="Tout sélectionner" className="w-4 h-4 rounded accent-indigo-600 cursor-pointer" /></th>
-                                                                    <Th k="id">Casier</Th>
-                                                                    <Th k="rack">Rack</Th>
-                                                                    <Th k="web">WEB</Th>
-                                                                    <Th k="notion">NOTION</Th>
-                                                                    <Th k="plc">AUTOMATE</Th>
-                                                                    <Th k="critCount">Alignement</Th>
-                                                                    <th className="px-4 py-3 w-px"></th>
-                                                                </tr>
-                                                            </thead>
-                                                            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                                                                {rows.map((a) => (
-                                                                    <tr key={a.id} className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors ${selected.has(a.id) ? 'bg-indigo-50/60 dark:bg-indigo-500/5' : ''} ${showingDone ? 'opacity-75' : ''}`}>
-                                                                        <td className="pl-4 pr-0 py-2.5"><input type="checkbox" checked={selected.has(a.id)} onChange={() => toggleOne(a.id)} aria-label={`Sélectionner #${a.id}`} className="w-4 h-4 rounded accent-indigo-600 cursor-pointer" /></td>
-                                                                        <td className="px-4 py-2.5">
-                                                                            <div className="flex items-center gap-2">
-                                                                                <span className="font-bold tnum">#{a.id}</span>
-                                                                                {isChanged(a) && <span title="Les états ont changé depuis la validation" className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300">Modifié</span>}
-                                                                                {showingDone && vmap[a.id] && <span className="text-[10px] text-slate-400 tnum">validée le {fmtTs(vmap[a.id].ts)}</span>}
-                                                                                {result.newIds.has(a.id) && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-indigo-100 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300">Nouveau</span>}
-                                                                            </div>
-                                                                            <div className="text-xs text-slate-500 dark:text-slate-400">Casier {a.locker} · sous-casier {a.sub}</div>
-                                                                            {a.comment && <div className="text-xs italic text-amber-700 dark:text-amber-300/90 max-w-[260px] truncate" title={a.comment}>{a.comment}</div>}
-                                                                        </td>
-                                                                        <td className="px-4 py-2.5 text-xs font-mono text-slate-500 dark:text-slate-400">{a.rack || '—'}</td>
-                                                                        <td className="px-4 py-2.5"><StateBadge sys="web" state={a.web} /></td>
-                                                                        <td className="px-4 py-2.5"><StateBadge sys="notion" state={a.notion} /></td>
-                                                                        <td className="px-4 py-2.5"><StateBadge sys="plc" state={a.plc} /></td>
-                                                                        <td className="px-4 py-2.5"><Dots a={a} /></td>
-                                                                        <td className="px-4 py-2.5 text-right">
-                                                                            {showingDone
-                                                                                ? <button onClick={() => reopenRows([a])} className="flex items-center gap-1.5 ml-auto text-xs font-medium px-2.5 py-1.5 rounded-lg text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 transition"><Icon n="undo" className="w-3.5 h-3.5" />Rouvrir</button>
-                                                                                : <button onClick={() => validateRows([a])} title="Marquer comme corrigé" className="flex items-center gap-1.5 ml-auto text-xs font-semibold px-2.5 py-1.5 rounded-lg text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-500/10 ring-1 ring-inset ring-emerald-200 dark:ring-emerald-500/30 hover:bg-emerald-100 dark:hover:bg-emerald-500/20 transition"><Icon n="tick" className="w-3.5 h-3.5" />Valider</button>}
-                                                                        </td>
-                                                                    </tr>
-                                                                ))}
-                                                                {rows.length === 0 && (
-                                                                    <tr><td colSpan="8" className="text-center py-10 text-slate-500">{!showingDone && view.active.length === 0 ? 'Toutes les anomalies ont été validées.' : 'Aucun résultat pour ces filtres.'}</td></tr>
-                                                                )}
-                                                            </tbody>
-                                                        </table>
+                                                    <div className="flex items-center gap-2">
+                                                        <div className="relative flex-1 md:w-60">
+                                                            <Icon n="search" className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                                                            <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Casier, rack, commentaire…" className="w-full pl-9 pr-3 py-2 text-sm rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-400/60" />
+                                                        </div>
+                                                        <button onClick={exportCsv} className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 transition"><Icon n="download" className="w-4 h-4" />CSV</button>
                                                     </div>
-                                                </>
-                                            )}
+                                                </div>
+
+                                                <div className="flex flex-col lg:flex-row lg:items-center gap-4">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-xs font-semibold text-slate-400 uppercase">Voir :</span>
+                                                        <div className="flex bg-slate-100 dark:bg-slate-800/80 p-0.5 rounded-lg w-max shrink-0">
+                                                            <button onClick={() => setViewType('all')} className={`px-3 py-1 text-xs font-bold rounded-md transition ${viewType === 'all' ? 'bg-white dark:bg-slate-600 shadow-sm text-slate-800 dark:text-white' : 'text-slate-500 hover:text-slate-700'}`}>Tout</button>
+                                                            <button onClick={() => setViewType('casier')} className={`px-3 py-1 text-xs font-bold rounded-md transition ${viewType === 'casier' ? 'bg-white dark:bg-slate-600 shadow-sm text-slate-800 dark:text-white' : 'text-slate-500 hover:text-slate-700'}`}>Casiers</button>
+                                                            <button onClick={() => setViewType('rack')} className={`px-3 py-1 text-xs font-bold rounded-md transition ${viewType === 'rack' ? 'bg-white dark:bg-slate-600 shadow-sm text-slate-800 dark:text-white' : 'text-slate-500 hover:text-slate-700'}`}>Racks</button>
+                                                        </div>
+                                                    </div>
+                                                    
+                                                    {viewMode === 'anomalies' && (
+                                                        <>
+                                                            <div className="hidden lg:block h-5 w-px bg-slate-200 dark:bg-slate-700"></div>
+                                                            <div className="flex flex-wrap gap-2">
+                                                                {filterDefs.map((f) => (
+                                                                    <button key={f.k} onClick={() => setFilter(f.k)} className={`px-3 py-1 rounded-full text-xs font-medium border transition ${filter === f.k ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white dark:bg-slate-900 text-slate-600 border-slate-200 dark:border-slate-700 hover:border-indigo-300'}`}>
+                                                                        {f.label} <span className="opacity-70 tnum">{f.n}</span>
+                                                                    </button>
+                                                                ))}
+                                                            </div>
+                                                        </>
+                                                    )}
+                                                </div>
+
+                                                {selectedRows.length > 0 && (
+                                                    <div className="pop flex flex-wrap items-center gap-3 px-3 py-2 rounded-xl bg-indigo-50 dark:bg-indigo-500/10 border border-indigo-200 dark:border-indigo-500/30">
+                                                        <span className="text-sm font-medium text-indigo-700 dark:text-indigo-200 tnum">{selectedRows.length} sélectionnée(s)</span>
+                                                        {viewMode === 'anomalies' && (
+                                                            showingDone ? <button onClick={() => reopenRows(selectedRows)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold bg-white border border-slate-200 hover:bg-slate-50 transition"><Icon n="undo" className="w-4 h-4" />Rouvrir</button>
+                                                            : <button onClick={() => validateRows(selectedRows)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-semibold text-white bg-emerald-600 hover:bg-emerald-700 transition"><Icon n="tick" className="w-4 h-4" />Valider</button>
+                                                        )}
+                                                        <button onClick={() => setSelected(new Set())} className="text-sm text-slate-500 hover:text-slate-800 transition">Désélectionner</button>
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            <div className="overflow-auto max-h-[62vh] thin-scroll">
+                                                <table className="w-full text-sm text-left">
+                                                    <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-slate-900 text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                                                        <tr>
+                                                            <th className="pl-4 pr-0 py-3 w-8"><input type="checkbox" checked={allSelected} onChange={toggleAll} disabled={rows.length === 0} className="w-4 h-4 rounded accent-indigo-600 cursor-pointer" /></th>
+                                                            <Th k="id">Entité</Th>
+                                                            <Th k="rack">Emplacement</Th>
+                                                            <Th k="web">WEB</Th>
+                                                            <Th k="notion">NOTION</Th>
+                                                            <Th k="plc">AUTOMATE</Th>
+                                                            <Th k="critCount">États</Th>
+                                                            <th className="px-4 py-3 w-px"></th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                                        {rows.map((a) => (
+                                                            <tr key={a.id} className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors ${selected.has(a.id) ? 'bg-indigo-50/60 dark:bg-indigo-500/5' : ''} ${showingDone ? 'opacity-75' : ''}`}>
+                                                                <td className="pl-4 pr-0 py-2.5"><input type="checkbox" checked={selected.has(a.id)} onChange={() => toggleOne(a.id)} className="w-4 h-4 rounded accent-indigo-600 cursor-pointer" /></td>
+                                                                <td className="px-4 py-2.5">
+                                                                    <div className="flex items-center gap-2">
+                                                                        <span className={`font-bold tnum ${a.type === 'rack' ? 'text-indigo-600 dark:text-indigo-400' : ''}`}>{a.displayId}</span>
+                                                                        {a.type === 'rack' && <Icon n="layers" className="w-3.5 h-3.5 text-indigo-400" />}
+                                                                        {a.isAnomaly && viewMode === 'inventory' && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-red-100 text-red-700">Anomalie</span>}
+                                                                        {isChanged(a) && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-amber-100 text-amber-700">Modifié</span>}
+                                                                        {result.newIds.has(a.id) && viewMode === 'anomalies' && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase bg-indigo-100 text-indigo-700">Nouveau</span>}
+                                                                    </div>
+                                                                    {a.type === 'casier' && <div className="text-xs text-slate-500 dark:text-slate-400">Casier {a.locker} · sous {a.sub}</div>}
+                                                                    {a.comment && <div className="text-[11px] mt-0.5 italic text-amber-700 dark:text-amber-300 max-w-[220px] truncate" title={a.comment}>{a.comment}</div>}
+                                                                </td>
+                                                                <td className="px-4 py-2.5 text-xs font-mono text-slate-500">{a.rack || '—'}</td>
+                                                                <td className="px-4 py-2.5"><StateBadge sys="web" state={a.web} /></td>
+                                                                <td className="px-4 py-2.5"><StateBadge sys="notion" state={a.notion} /></td>
+                                                                <td className="px-4 py-2.5"><StateBadge sys="plc" state={a.plc} /></td>
+                                                                <td className="px-4 py-2.5"><Dots a={a} /></td>
+                                                                <td className="px-4 py-2.5 text-right">
+                                                                    {viewMode === 'anomalies' && a.isAnomaly && (
+                                                                        showingDone ? <button onClick={() => reopenRows([a])} className="flex items-center gap-1.5 ml-auto text-xs font-medium px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 transition"><Icon n="undo" className="w-3.5 h-3.5" />Rouvrir</button>
+                                                                        : <button onClick={() => validateRows([a])} className="flex items-center gap-1.5 ml-auto text-xs font-semibold px-2.5 py-1.5 rounded-lg text-emerald-700 bg-emerald-50 ring-1 ring-inset ring-emerald-200 hover:bg-emerald-100 transition"><Icon n="tick" className="w-3.5 h-3.5" />Valider</button>
+                                                                    )}
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                        {rows.length === 0 && <tr><td colSpan="8" className="text-center py-10 text-slate-500">Aucun résultat pour cette vue ou ces filtres.</td></tr>}
+                                                    </tbody>
+                                                </table>
+                                            </div>
                                         </div>
                                     </div>
                                 )}
                             </div>
 
-                            {/* ---------- Historique ---------- */}
                             <aside className={`${CARD} flex flex-col xl:sticky xl:top-24 max-h-[560px]`}>
                                 <div className="p-4 border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between">
                                     <div className="flex items-center gap-2 font-semibold"><Icon n="clock" className="w-5 h-5 text-slate-400" />Historique</div>
-                                    {history.length > 0 && (
-                                        <button onClick={clearHistory} title="Vider l'historique" className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition"><Icon n="trash" className="w-4 h-4" /></button>
-                                    )}
+                                    {history.length > 0 && <button onClick={clearHistory} className="p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition"><Icon n="trash" className="w-4 h-4" /></button>}
                                 </div>
                                 <div className="p-3 overflow-y-auto thin-scroll flex-1">
-                                    {history.length === 0 ? (
-                                        <p className="text-sm text-slate-400 text-center py-8">Aucune analyse enregistrée.</p>
-                                    ) : (
-                                        <ul className="space-y-2">
+                                    {history.length === 0 ? <p className="text-sm text-slate-400 text-center py-8">Aucune analyse.</p>
+                                        : <ul className="space-y-2">
                                             {history.map((h, i) => {
                                                 const older = history.slice(i + 1).find((o) => String(o.machine) === String(h.machine));
                                                 const delta = older ? h.count - older.count : null;
-                                                const [d, t] = (h.date || '').split(' ');
                                                 return (
                                                     <li key={i} className="p-3 rounded-xl border border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/40">
-                                                        <div className="flex justify-between text-xs text-slate-500 dark:text-slate-400"><span>{d}</span><span>{t}</span></div>
-                                                        <div className="mt-1.5 flex items-center justify-between">
-                                                            <span className="font-semibold text-sm">Machine {h.machine}</span>
-                                                            <span className="flex items-center gap-2">
-                                                                {delta != null && delta !== 0 && (
-                                                                    <span className={`text-xs font-semibold tnum ${delta > 0 ? 'text-red-500' : 'text-emerald-500'}`}>{delta > 0 ? '+' : ''}{delta}</span>
-                                                                )}
-                                                                <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${h.count > 0 ? 'bg-red-100 text-red-600 dark:bg-red-500/15 dark:text-red-300' : 'bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-300'}`}>
-                                                                    {h.count} erreur(s)
-                                                                </span>
+                                                        <div className="flex justify-between text-xs text-slate-500"><span>{(h.date||'').split(' ')[0]}</span><span>{(h.date||'').split(' ')[1]}</span></div>
+                                                        <div className="mt-1.5 flex justify-between items-center">
+                                                            <span className="font-semibold text-sm line-clamp-1">{h.machine}</span>
+                                                            <span className="flex items-center gap-2 shrink-0">
+                                                                {delta != null && delta !== 0 && <span className={`text-xs font-bold tnum ${delta > 0 ? 'text-red-500' : 'text-emerald-500'}`}>{delta > 0 ? '+' : ''}{delta}</span>}
+                                                                <span className={`px-2 py-0.5 rounded-full text-xs font-bold ${h.count > 0 ? 'bg-red-100 text-red-600' : 'bg-emerald-100 text-emerald-600'}`}>{h.count} alerte(s)</span>
                                                             </span>
                                                         </div>
-                                                        {h.total != null && <div className="mt-1 text-[11px] text-slate-400">sur {h.total} sous-casiers</div>}
                                                     </li>
                                                 );
                                             })}
-                                        </ul>
-                                    )}
+                                        </ul>}
                                 </div>
                             </aside>
                         </section>
                     </main>
 
                     {toast && (
-                        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 pop flex items-center gap-4 pl-4 pr-3 py-2.5 rounded-xl text-sm font-medium bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-lg">
+                        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 pop flex items-center gap-4 pl-4 pr-3 py-2.5 rounded-xl text-sm font-medium bg-slate-900 text-white shadow-lg">
                             <span>{toast.msg}</span>
-                            {toast.undo && <button onClick={toast.undo} className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-semibold bg-white/15 hover:bg-white/25 dark:bg-slate-900/10 dark:hover:bg-slate-900/20 transition"><Icon n="undo" className="w-4 h-4" />Annuler</button>}
+                            {toast.undo && <button onClick={toast.undo} className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-semibold bg-white/15 hover:bg-white/25 transition"><Icon n="undo" className="w-4 h-4" />Annuler</button>}
                         </div>
                     )}
                 </div>
@@ -824,4 +874,5 @@
         root.render(<App />);
     </script>
 </body>
+
 </html>
